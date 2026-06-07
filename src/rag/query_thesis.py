@@ -55,6 +55,16 @@ PREFERRED_OVERVIEW_SECTIONS = {
     "conclusion",
     "related_work",
 }
+OVERVIEW_SECTION_PRIORITY = {
+    "abstract": 0,
+    "introduction": 1,
+    "method": 2,
+    "setup": 3,
+    "results": 4,
+    "conclusion": 5,
+    "related_work": 6,
+    "section": 7,
+}
 
 
 def load_yaml(path: str | Path) -> Dict[str, Any]:
@@ -124,12 +134,23 @@ def is_broad_overview_query(query: str) -> bool:
 
     english_patterns = [
         "what is this paper about",
+        "what is this paper mainly about",
         "what is this thesis about",
+        "what is this thesis mainly about",
+        "what is this document about",
+        "what is this document mainly about",
+        "what does this paper mainly discuss",
+        "what does this thesis mainly discuss",
         "main idea",
         "main topic",
+        "main contribution",
         "summarize the paper",
         "summarize this paper",
+        "summarize the thesis",
+        "summarize this thesis",
         "overview of the paper",
+        "overview of this paper",
+        "overview of the thesis",
         "overview of this thesis",
     ]
 
@@ -287,31 +308,63 @@ def node_page(node_with_score: NodeWithScore) -> int:
 
 def filter_nodes_for_overview(nodes: List[NodeWithScore], top_k: int) -> List[NodeWithScore]:
     """
-    Broad overview questions should not be answered from acknowledgements,
-    commitment statements, cover pages, table of contents, or references.
+    Broad overview questions should focus on academic content sections.
 
-    We post-filter retrieval results here because vector search may rank Chinese
-    acknowledgements highly for vague Chinese queries like "这篇文章主要在讲什么？".
+    The filtering removes acknowledgements, commitment pages, cover pages,
+    references, and very short heading-only chunks. Then it ranks evidence by
+    section priority and retrieval score.
     """
-    preferred = []
-    backup = []
+    candidates = []
 
     for item in nodes:
-        section = node_section(item)
+        node = item.node
+        metadata = node.metadata or {}
+
+        section = str(metadata.get("section_type") or "").strip().lower()
+        unit_type = str(metadata.get("unit_type") or "").strip().lower()
+        section_title = str(metadata.get("section_title") or "").strip().lower()
+        text = clean_text(node.get_content())
+        char_len = int(metadata.get("char_len") or len(text))
+
         if section in NON_CONTENT_SECTIONS:
             continue
-        if section in PREFERRED_OVERVIEW_SECTIONS:
-            preferred.append(item)
-        else:
-            backup.append(item)
 
-    filtered = preferred + backup
+        if unit_type == "heading" and char_len < 120:
+            continue
 
-    # Sort lightly by page for overview questions so abstract/introduction/method/results
-    # appear in a more natural document order, while still using retrieved candidates.
-    filtered = sorted(filtered, key=lambda x: (node_page(x), -float(x.score or 0.0)))
+        if char_len < 80:
+            continue
 
-    return filtered[:top_k]
+        noisy_title_patterns = [
+            "thesis organization",
+            "overall results .",
+            "references",
+            "acknowledgement",
+            "致谢",
+            "诚信承诺",
+            "目录",
+        ]
+
+        if any(p in section_title for p in noisy_title_patterns):
+            continue
+
+        candidates.append(item)
+
+    if not candidates:
+        candidates = [
+            item
+            for item in nodes
+            if node_section(item) not in NON_CONTENT_SECTIONS
+        ]
+
+    def rank_key(item: NodeWithScore):
+        section = node_section(item)
+        priority = OVERVIEW_SECTION_PRIORITY.get(section, 9)
+        score = float(item.score or 0.0)
+        return (priority, -score)
+
+    candidates = sorted(candidates, key=rank_key)
+    return candidates[:top_k]
 
 
 def retrieve_nodes(
@@ -336,20 +389,36 @@ def generate_answer(llm: OpenAI, question: str, nodes: List[NodeWithScore]) -> s
 
     if is_broad_overview_query(question):
         prompt = f"""
-You are a source-grounded QA assistant for a RAG demo.
-The user asks for an overview of the document.
+You are a source-grounded QA assistant for an academic RAG demo.
+The user asks for a broad overview of the document.
 
-Use only the retrieved sources, but focus on the academic/research content:
+Use only the retrieved sources, but focus on the academic and research content:
 - research problem
 - motivation
-- method/framework
+- proposed method or framework
 - experimental setup
-- results
+- main results
 - conclusion and limitations
 
-Do not treat acknowledgements, cover page, commitment statement, table of contents, or references as the main content of the paper.
+Important domain rule:
+This document is about large language models, Chain-of-Thought reasoning, mathematical reasoning distillation, student model learning, local CoT repair, and supervised fine-tuning.
 
-Answer in Chinese if the question is in Chinese. Be concise and accurate.
+Do NOT describe the paper as education technology, classroom learning, personal growth, acknowledgements, university life, or a general reflection essay unless the user explicitly asks about those parts.
+
+Do NOT treat acknowledgements, cover page, commitment statement, table of contents, or references as the main content of the paper.
+
+If the question is in Chinese, answer in Chinese.
+If the question is in English, answer in English.
+
+For broad overview questions, use this structure:
+1. What problem the document studies;
+2. What method or framework it proposes;
+3. What experiments or evaluations it conducts;
+4. What main results or conclusions it reports;
+5. What limitations or cautious statements should be kept in mind.
+
+Be concise, accurate, and evidence-grounded.
+Avoid unsupported broad claims.
 
 Question:
 {question}
@@ -373,6 +442,9 @@ Grounding rules:
 5. If the evidence is partial, say what is supported and what is not supported.
 6. Do not turn absence of evidence into a positive claim.
 7. Be concise, but include enough explanation to show why the answer is grounded.
+
+If the question is in Chinese, answer in Chinese.
+If the question is in English, answer in English.
 
 Question:
 {question}

@@ -72,11 +72,47 @@ def run_query(question: str, show_rewritten_query: bool = True) -> str:
 
 
 def extract_block(text: str, title: str) -> str:
-    pattern = rf"{re.escape(title)}\n-+\n(.*?)(?=\n[A-Za-z ]+\n-+\n|\Z)"
-    match = re.search(pattern, text, flags=re.DOTALL)
-    if not match:
+    """
+    Robustly extract a block from CLI output.
+
+    Expected CLI format:
+
+    Question
+    --------
+    ...
+
+    Retrieval Query
+    ---------------
+    ...
+
+    Answer
+    ------
+    ...
+
+    Evidence
+    --------
+    ...
+    """
+    lines = text.splitlines()
+    start = None
+
+    for i in range(len(lines) - 1):
+        if lines[i].strip() == title and set(lines[i + 1].strip()) <= {"-"} and lines[i + 1].strip():
+            start = i + 2
+            break
+
+    if start is None:
         return ""
-    return match.group(1).strip()
+
+    end = len(lines)
+    for j in range(start, len(lines) - 1):
+        current = lines[j].strip()
+        next_line = lines[j + 1].strip()
+        if current in {"Question", "Retrieval Query", "Answer", "Evidence"} and set(next_line) <= {"-"} and next_line:
+            end = j
+            break
+
+    return "\n".join(lines[start:end]).strip()
 
 
 def parse_evidence(raw_evidence: str) -> list[dict[str, str]]:
