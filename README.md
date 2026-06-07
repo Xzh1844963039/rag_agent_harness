@@ -1,9 +1,34 @@
-#README.md
 # Corpus-aware Agentic RAG with LlamaIndex
 
 This project is a corpus-aware Agentic RAG system built with LlamaIndex. It started from a thesis QA task, but the current version is designed as a more general framework for document-grounded question answering, claim verification, and citation-aware response generation.
 
 The core goal is not just to retrieve chunks and answer questions. The system tries to check whether the retrieved evidence is sufficient, retry retrieval when needed, expand neighboring context, generate grounded answers, audit citation support, and revise answers that are not sufficiently supported.
+
+## System Pipeline
+
+```mermaid
+flowchart LR
+    A[PDF Documents] --> B[Hybrid PDF Parsing]
+    B --> C[Section-aware Chunking]
+    C --> D[Vector Index]
+
+    E[User Question] --> F[Query Rewrite]
+    F --> G[Retrieval]
+    G --> H[Evidence Sufficiency Check]
+
+    H -->|Insufficient| I[Retry Retrieval]
+    H -->|Sufficient| J[Neighbor Context Expansion]
+    I --> J
+
+    J --> K[Answer Generation]
+    K --> L[Citation Audit]
+
+    L -->|Unsupported Claims| M[Answer Revision]
+    L -->|Grounded| N[Final Answer with Evidence]
+    M --> N
+```
+
+
 
 ## 1. Project Overview
 

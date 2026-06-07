@@ -11,3 +11,4 @@ pymupdf
 rapidocr-onnxruntime
 opencv-python
 pillow
+streamlit

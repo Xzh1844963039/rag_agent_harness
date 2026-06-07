@@ -10,6 +10,7 @@ Main improvements in this version:
 2. Evidence table with page / section / chunk information.
 3. Clearer unsupported-claim behavior.
 4. Optional display of rewritten retrieval query.
+5. Better handling for broad Chinese overview questions.
 """
 
 from __future__ import annotations
@@ -32,6 +33,28 @@ from llama_index.llms.openai import OpenAI
 
 MAX_SOURCE_CHARS_FOR_PROMPT = 1200
 MAX_EVIDENCE_PREVIEW_CHARS = 260
+
+
+NON_CONTENT_SECTIONS = {
+    "acknowledgement",
+    "acknowledgements",
+    "references",
+    "reference",
+    "toc",
+    "cover",
+    "commitment",
+}
+
+
+PREFERRED_OVERVIEW_SECTIONS = {
+    "abstract",
+    "introduction",
+    "method",
+    "setup",
+    "results",
+    "conclusion",
+    "related_work",
+}
 
 
 def load_yaml(path: str | Path) -> Dict[str, Any]:
@@ -78,12 +101,105 @@ def format_profile(profile: Dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line.strip())
 
 
+def is_chinese_text(text: str) -> bool:
+    return bool(re.search(r"[\u4e00-\u9fff]", text))
+
+
+def is_broad_overview_query(query: str) -> bool:
+    q = query.strip().lower()
+
+    chinese_patterns = [
+        "主要在讲什么",
+        "主要讲什么",
+        "文章讲什么",
+        "论文讲什么",
+        "这篇文章",
+        "这篇论文",
+        "主要内容",
+        "核心内容",
+        "总结一下",
+        "概括一下",
+        "大概讲",
+    ]
+
+    english_patterns = [
+        "what is this paper about",
+        "what is this thesis about",
+        "main idea",
+        "main topic",
+        "summarize the paper",
+        "summarize this paper",
+        "overview of the paper",
+        "overview of this thesis",
+    ]
+
+    return any(p in q for p in chinese_patterns + english_patterns)
+
+
+def build_profile_keywords_for_overview(corpus_profile: Dict[str, Any]) -> str:
+    corpus = corpus_profile.get("corpus", {}) or {}
+
+    parts: List[str] = []
+
+    title = corpus.get("title")
+    domain = corpus.get("domain")
+    description = corpus.get("description")
+
+    if title:
+        parts.append(str(title))
+    if domain:
+        parts.append(str(domain))
+    if description:
+        parts.append(str(description))
+
+    topics = corpus.get("topics", []) or []
+    parts.extend(str(x) for x in topics)
+
+    optional_keywords = corpus.get("optional_keywords", []) or []
+    parts.extend(str(x) for x in optional_keywords)
+
+    entity_types = corpus.get("entity_types", {}) or {}
+    for values in entity_types.values():
+        if isinstance(values, list):
+            parts.extend(str(x) for x in values)
+
+    # Keep the query compact to avoid over-expansion.
+    seen = set()
+    deduped = []
+    for p in parts:
+        p = p.strip()
+        if not p or p.lower() in seen:
+            continue
+        seen.add(p.lower())
+        deduped.append(p)
+
+    return " ".join(deduped[:40])
+
+
 def rewrite_query_for_retrieval(
     llm: OpenAI,
     user_query: str,
     corpus_profile: Dict[str, Any] | None = None,
 ) -> str:
-    profile_text = format_profile(corpus_profile or {})
+    corpus_profile = corpus_profile or {}
+
+    if is_broad_overview_query(user_query):
+        profile_terms = build_profile_keywords_for_overview(corpus_profile)
+
+        # For broad overview questions, force retrieval toward academic content sections.
+        # This is still corpus-aware because the topic terms come from corpus_profile.yaml,
+        # not from hardcoded thesis-specific Python rules.
+        overview_query = f"""
+{user_query}
+请检索论文的摘要、引言、研究问题、研究目标、方法框架、实验设置、主要结果、结论和局限性。
+Avoid acknowledgements, commitment statement, cover page, table of contents, and references.
+abstract introduction research motivation research objective research questions method framework experimental setup evaluation results discussion conclusion limitations future work main contribution
+{profile_terms}
+""".strip()
+
+        return overview_query
+
+    profile_text = format_profile(corpus_profile)
     prompt = f"""
 You are a query rewriting module for a source-grounded RAG system.
 
@@ -156,8 +272,95 @@ def build_source_blocks(nodes: List[NodeWithScore]) -> List[str]:
     return source_blocks
 
 
+def node_section(node_with_score: NodeWithScore) -> str:
+    metadata = node_with_score.node.metadata or {}
+    return str(metadata.get("section_type") or "").strip().lower()
+
+
+def node_page(node_with_score: NodeWithScore) -> int:
+    metadata = node_with_score.node.metadata or {}
+    try:
+        return int(metadata.get("page") or 999999)
+    except Exception:
+        return 999999
+
+
+def filter_nodes_for_overview(nodes: List[NodeWithScore], top_k: int) -> List[NodeWithScore]:
+    """
+    Broad overview questions should not be answered from acknowledgements,
+    commitment statements, cover pages, table of contents, or references.
+
+    We post-filter retrieval results here because vector search may rank Chinese
+    acknowledgements highly for vague Chinese queries like "这篇文章主要在讲什么？".
+    """
+    preferred = []
+    backup = []
+
+    for item in nodes:
+        section = node_section(item)
+        if section in NON_CONTENT_SECTIONS:
+            continue
+        if section in PREFERRED_OVERVIEW_SECTIONS:
+            preferred.append(item)
+        else:
+            backup.append(item)
+
+    filtered = preferred + backup
+
+    # Sort lightly by page for overview questions so abstract/introduction/method/results
+    # appear in a more natural document order, while still using retrieved candidates.
+    filtered = sorted(filtered, key=lambda x: (node_page(x), -float(x.score or 0.0)))
+
+    return filtered[:top_k]
+
+
+def retrieve_nodes(
+    retriever: Any,
+    retrieval_query: str,
+    question: str,
+    top_k: int,
+) -> List[NodeWithScore]:
+    # Retrieve more candidates for broad overview queries, then remove front matter / back matter.
+    if is_broad_overview_query(question):
+        nodes = retriever.retrieve(retrieval_query)
+        filtered = filter_nodes_for_overview(nodes, top_k)
+        if filtered:
+            return filtered
+        return nodes[:top_k]
+
+    return retriever.retrieve(retrieval_query)
+
+
 def generate_answer(llm: OpenAI, question: str, nodes: List[NodeWithScore]) -> str:
     source_text = "\n\n".join(build_source_blocks(nodes))
+
+    if is_broad_overview_query(question):
+        prompt = f"""
+You are a source-grounded QA assistant for a RAG demo.
+The user asks for an overview of the document.
+
+Use only the retrieved sources, but focus on the academic/research content:
+- research problem
+- motivation
+- method/framework
+- experimental setup
+- results
+- conclusion and limitations
+
+Do not treat acknowledgements, cover page, commitment statement, table of contents, or references as the main content of the paper.
+
+Answer in Chinese if the question is in Chinese. Be concise and accurate.
+
+Question:
+{question}
+
+Retrieved sources:
+{source_text}
+
+Answer:
+""".strip()
+        return str(llm.complete(prompt)).strip()
+
     prompt = f"""
 You are a source-grounded QA assistant for a RAG demo.
 Answer the user question using only the retrieved sources.
@@ -253,10 +456,13 @@ def main() -> None:
 
     top_k = args.top_k if args.top_k is not None else int(cfg.get("rag", {}).get("top_k", 8))
     use_query_rewrite = bool(cfg.get("rag", {}).get("use_query_rewrite", True))
-    retriever = index.as_retriever(similarity_top_k=top_k)
+
+    # Retrieve more candidates for broad overview questions, then post-filter them.
+    retriever_top_k = max(top_k * 3, 20) if is_broad_overview_query(question) else top_k
+    retriever = index.as_retriever(similarity_top_k=retriever_top_k)
 
     retrieval_query = rewrite_query_for_retrieval(llm, question, corpus_profile) if use_query_rewrite else question
-    nodes = retriever.retrieve(retrieval_query)
+    nodes = retrieve_nodes(retriever, retrieval_query, question, top_k)
     answer = generate_answer(llm, question, nodes)
 
     print_demo_summary(question, retrieval_query, args.show_rewritten_query)
