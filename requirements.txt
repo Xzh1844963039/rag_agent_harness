@@ -1,0 +1,13 @@
+llama-index
+llama-index-llms-openai
+llama-index-embeddings-openai
+python-dotenv
+pydantic
+pyyaml
+tqdm
+pandas
+numpy
+pymupdf
+rapidocr-onnxruntime
+opencv-python
+pillow

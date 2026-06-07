@@ -1,0 +1,47 @@
+#configs/baseline.yaml
+project:
+  name: "rag_agent_harness"
+  description: "Corpus-aware Agentic RAG system with evaluation harness based on LlamaIndex"
+
+paths:
+  raw_pdf: "data/raw_docs/student_oriented_cot_optimization_thesis.pdf"
+  parsed_markdown: "data/parsed/thesis_clean.md"
+  parsed_pages: "data/parsed/thesis_clean_pages.jsonl"
+  storage_dir: "storage/thesis_index"
+  eval_file: "data/eval/eval_set.jsonl"
+  output_dir: "outputs/baseline_run"
+  corpus_profile: "configs/corpus_profile.yaml"
+
+llm:
+  model: "gpt-4o-mini"
+
+embedding:
+  model: "text-embedding-3-small"
+
+rag:
+  chunk_max_chars: 1800
+  min_chunk_chars: 180
+  chunk_overlap_sentences: 1
+  top_k: 8
+  use_rerank: false
+  use_query_rewrite: true
+  section_priority:
+    - abstract
+    - introduction
+    - method
+    - results
+    - conclusion
+    - setup
+    - related_work
+    - main_text
+    - toc
+    - references
+    - acknowledgement
+    - commitment
+    - cover
+
+agent:
+  use_web_search: false
+  max_retry: 1
+  max_sources_for_answer: 8
+  max_sources_for_judge: 6

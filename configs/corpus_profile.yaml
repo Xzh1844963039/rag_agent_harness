@@ -1,0 +1,64 @@
+#configs/corpus_profile.yaml
+corpus:
+  name: "thesis_cot_repair"
+  title: "Student-Oriented Chain-of-Thought Optimization"
+  description: "A source-grounded RAG corpus over a thesis or research documents. Domain-specific terms are stored here rather than hardcoded in Python."
+  domain: "math reasoning / LLM fine-tuning / research thesis QA"
+
+  topics:
+    - research problem
+    - Teacher-Student-Controller framework
+    - local Chain-of-Thought repair
+    - key-step localization
+    - supervised fine-tuning
+    - experimental setup
+    - results
+    - tables and figures
+    - limitations and future work
+    - citation or claim verification
+
+  optional_keywords:
+    - abstract
+    - introduction
+    - related work
+    - method
+    - framework
+    - experiment
+    - evaluation
+    - results
+    - discussion
+    - conclusion
+    - limitation
+    - future work
+    - table
+    - figure
+
+  entity_types:
+    benchmarks:
+      - math500 strict
+    models:
+      - Qwen2.5-Math-1.5B
+      - Qwen2.5-Math-7B
+      - GPT-4o-mini
+    datasets:
+      - teacher-generated CoT data
+      - repaired CoT data
+    methods:
+      - Teacher-Student-Controller framework
+      - local CoT repair
+      - QLoRA
+      - DoRA
+      - supervised fine-tuning
+    metrics:
+      - accuracy
+
+  # Optional section normalization. This is corpus configuration, not Python hardcoding.
+  # Remove or change it when indexing a different corpus.
+  section_rules:
+    chapter_map:
+      "1": introduction
+      "2": related_work
+      "3": method
+      "4": setup
+      "5": results
+      "6": conclusion
