@@ -23,7 +23,8 @@ rag:
   min_chunk_chars: 180
   chunk_overlap_sentences: 1
   top_k: 8
-  use_rerank: false
+  use_rerank: true
+  rerank_mode: "heuristic"   # choices: none, heuristic, llm
   use_query_rewrite: true
   section_priority:
     - abstract
